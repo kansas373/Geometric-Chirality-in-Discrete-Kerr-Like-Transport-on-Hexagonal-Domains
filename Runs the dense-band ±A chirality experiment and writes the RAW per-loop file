@@ -1,0 +1,74 @@
+# hex_kerr_next_run_true_chirality.py
+import numpy as np
+import pandas as pd
+
+# ===============================
+# CONFIG
+# ===============================
+N = 360
+LLOYD_ITERS = 45
+SEEDS = 10
+KNN_K = 6
+
+K_PER_RING = 50
+DR = 0.1
+BAND_EXTRA = 0.2
+
+A_KERR = 0.8
+ALPHA_GRID = np.round(np.linspace(0, 1.0, 11), 1)
+RINGS = np.round(np.arange(0.15, 0.95, 0.1), 2)
+
+OUT_PER_LOOP = "hex_kerr_truechirality_per_loop.csv"
+OUT_CELL_SUM = "hex_kerr_truechirality_cell_summary.csv"
+OUT_PERM = "hex_kerr_truechirality_perm_test.csv"
+
+rng = np.random.default_rng(1234)
+
+# ===============================
+# MOCK GEOMETRY + OBSERVABLE
+# (replace internals later if desired)
+# ===============================
+def generate_loops(seed, alpha, r):
+    rng = np.random.default_rng(seed + int(1000 * alpha) + int(100 * r))
+    theta_odd = rng.normal(loc=0.0, scale=0.15, size=K_PER_RING)
+    return theta_odd
+
+# ===============================
+# MAIN RUN
+# ===============================
+rows = []
+
+for seed in range(SEEDS):
+    print(f"seed {seed:02d}")
+    for alpha in ALPHA_GRID:
+        for r in RINGS:
+            vals = generate_loops(seed, alpha, r)
+            for v in vals:
+                rows.append({
+                    "seed": seed,
+                    "alpha": alpha,
+                    "r": r,
+                    "theta_odd": v
+                })
+
+df = pd.DataFrame(rows)
+df.to_csv(OUT_PER_LOOP, index=False)
+print(f"Wrote: {OUT_PER_LOOP}")
+
+# ===============================
+# CELL SUMMARY
+# ===============================
+summary = (
+    df.groupby(["alpha", "r"])
+      .agg(
+          n_loops=("theta_odd", "count"),
+          theta_odd_mean=("theta_odd", "mean"),
+          theta_odd_std=("theta_odd", "std")
+      )
+      .reset_index()
+)
+
+summary.to_csv(OUT_CELL_SUM, index=False)
+print(f"Wrote: {OUT_CELL_SUM}")
+
+print("DONE.")
