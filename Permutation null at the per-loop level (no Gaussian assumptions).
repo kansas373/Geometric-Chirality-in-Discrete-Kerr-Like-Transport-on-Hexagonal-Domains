@@ -1,0 +1,37 @@
+# hex_kerr_next_run_perloop_null.py
+import numpy as np
+import pandas as pd
+
+CSV_IN = "hex_kerr_truechirality_per_loop.csv"
+CSV_OUT = "hex_kerr_truechirality_perm_test.csv"
+
+N_PERM = 5000
+rng = np.random.default_rng(2024)
+
+df = pd.read_csv(CSV_IN)
+
+results = []
+
+for (alpha, r), sub in df.groupby(["alpha", "r"]):
+    vals = sub["theta_odd"].to_numpy()
+    obs = np.mean(vals)
+
+    perm_means = np.zeros(N_PERM)
+    for i in range(N_PERM):
+        signs = rng.choice([-1, 1], size=len(vals))
+        perm_means[i] = np.mean(vals * signs)
+
+    p_val = (np.sum(np.abs(perm_means) >= abs(obs)) + 1) / (N_PERM + 1)
+
+    results.append({
+        "alpha": alpha,
+        "r": r,
+        "n_loops": len(vals),
+        "theta_odd_mean": obs,
+        "p_value": p_val
+    })
+
+out = pd.DataFrame(results)
+out.to_csv(CSV_OUT, index=False)
+print(f"Wrote: {CSV_OUT}")
+print("DONE.")
