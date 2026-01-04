@@ -1,0 +1,21 @@
+# hex_kerr_parametric_null.py
+import numpy as np
+import pandas as pd
+from scipy.stats import norm
+from statsmodels.stats.multitest import multipletests
+
+CSV = "hex_kerr_chirality_dense_band_odd_even.csv"
+OUT = "hex_kerr_chirality_parametric_null.csv"
+
+df = pd.read_csv(CSV)
+
+df["Z"] = df["theta_odd_mean"] / df["theta_odd_std"]
+df["p_value"] = 2 * (1 - norm.cdf(np.abs(df["Z"])))
+
+_, qvals, _, _ = multipletests(df["p_value"], method="fdr_bh")
+df["q_value"] = qvals
+
+df.to_csv(OUT, index=False)
+
+print(f"Wrote: {OUT}")
+print("DONE.")
