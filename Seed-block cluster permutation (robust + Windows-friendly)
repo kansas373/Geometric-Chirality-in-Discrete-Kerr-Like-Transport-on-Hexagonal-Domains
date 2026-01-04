@@ -1,0 +1,185 @@
+# hex_kerr_cluster_perm_seedblock.py
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+# =========================
+# CONFIG
+# =========================
+CSV = "hex_kerr_truechirality_per_loop.csv"   # must exist in current folder
+OUT_CSV = "hex_kerr_seedblock_cluster_perm.csv"
+OUT_TPNG = "hex_kerr_seedblock_t_heatmap.png"
+
+T_THRESH = 2.0
+N_PERM = 5000
+R_CONNECT = True   # cluster adjacency includes up/down/left/right
+SEED_COL_CANDIDATES = ["seed", "seed_id", "Seed", "SEED"]
+
+# =========================
+# HELPERS
+# =========================
+def find_seed_column(df: pd.DataFrame) -> str:
+    for c in SEED_COL_CANDIDATES:
+        if c in df.columns:
+            return c
+    raise RuntimeError(
+        f"Could not find a seed column. Looked for: {SEED_COL_CANDIDATES}\n"
+        f"Columns found: {list(df.columns)}"
+    )
+
+def max_cluster_mass(mask: np.ndarray, tvals: np.ndarray) -> float:
+    """
+    mask: boolean 2D where True indicates supra-threshold cells
+    tvals: same shape; cluster mass = sum(|t|) over cluster
+    """
+    H, W = mask.shape
+    visited = np.zeros_like(mask, dtype=bool)
+    best = 0.0
+
+    # 4-neighborhood connectivity
+    neigh = [(-1,0),(1,0),(0,-1),(0,1)] if R_CONNECT else []
+
+    for i in range(H):
+        for j in range(W):
+            if not mask[i,j] or visited[i,j]:
+                continue
+            # BFS/DFS
+            stack = [(i,j)]
+            visited[i,j] = True
+            mass = 0.0
+            while stack:
+                x,y = stack.pop()
+                mass += abs(tvals[x,y])
+                for dx,dy in neigh:
+                    nx, ny = x+dx, y+dy
+                    if 0 <= nx < H and 0 <= ny < W and mask[nx,ny] and not visited[nx,ny]:
+                        visited[nx,ny] = True
+                        stack.append((nx,ny))
+            if mass > best:
+                best = mass
+    return best
+
+def t_stat_from_seed_means(seed_means: np.ndarray) -> float:
+    """
+    One-sample t-stat vs 0 using seed-level means.
+    """
+    m = np.mean(seed_means)
+    s = np.std(seed_means, ddof=1)
+    n = len(seed_means)
+    if n < 2 or s == 0:
+        return 0.0
+    return m / (s / np.sqrt(n))
+
+# =========================
+# LOAD
+# =========================
+csv_path = Path(CSV)
+if not csv_path.exists():
+    raise FileNotFoundError(f"Could not find: {csv_path.resolve()}")
+
+df = pd.read_csv(csv_path)
+
+# Required columns
+req = ["alpha", "r", "theta_odd"]
+for c in req:
+    if c not in df.columns:
+        raise RuntimeError(f"Missing column '{c}'. Columns found: {list(df.columns)}")
+
+seed_col = find_seed_column(df)
+
+alphas = np.sort(df["alpha"].unique())
+radii = np.sort(df["r"].unique())
+seeds = np.sort(df[seed_col].unique())
+
+A = len(alphas)
+R = len(radii)
+S = len(seeds)
+
+print(f"Using CSV: {CSV}")
+print(f"Seeds={S}, grid={A}x{R}")
+print("\n=== SEED-BLOCK CLUSTER PERMUTATION ===")
+print(f"T_thresh={T_THRESH}, N_perm={N_PERM}")
+
+# Build seed x cell means (seed-blocking)
+# seed_cell_means[s, a, r] = mean theta_odd over loops for that seed/cell
+seed_cell_means = np.full((S, A, R), np.nan)
+
+for si, sd in enumerate(seeds):
+    sub_s = df[df[seed_col] == sd]
+    for ai, a in enumerate(alphas):
+        sub_a = sub_s[sub_s["alpha"] == a]
+        for ri, rr in enumerate(radii):
+            vals = sub_a[sub_a["r"] == rr]["theta_odd"].to_numpy()
+            if vals.size:
+                seed_cell_means[si, ai, ri] = np.mean(vals)
+
+# Compute observed t-grid
+t_grid = np.zeros((A, R), dtype=float)
+for ai in range(A):
+    for ri in range(R):
+        v = seed_cell_means[:, ai, ri]
+        v = v[np.isfinite(v)]
+        if len(v) >= 2:
+            t_grid[ai, ri] = t_stat_from_seed_means(v)
+        else:
+            t_grid[ai, ri] = 0.0
+
+mask_obs = np.abs(t_grid) >= T_THRESH
+obs_mass = max_cluster_mass(mask_obs, t_grid)
+
+# Permutation: sign-flip seed means (within each cell), preserving dependence
+perm_masses = np.zeros(N_PERM, dtype=float)
+rng = np.random.default_rng(12345)
+
+for p in range(N_PERM):
+    # flip signs per seed (same flips applied to all cells for that seed)
+    flips = rng.choice([-1.0, 1.0], size=S)
+    t_perm = np.zeros((A, R), dtype=float)
+    for ai in range(A):
+        for ri in range(R):
+            v = seed_cell_means[:, ai, ri]
+            ok = np.isfinite(v)
+            v = v[ok]
+            f = flips[ok]
+            if len(v) >= 2:
+                v2 = v * f
+                t_perm[ai, ri] = t_stat_from_seed_means(v2)
+            else:
+                t_perm[ai, ri] = 0.0
+
+    mask_p = np.abs(t_perm) >= T_THRESH
+    perm_masses[p] = max_cluster_mass(mask_p, t_perm)
+
+p_cluster = (np.sum(perm_masses >= obs_mass) + 1.0) / (N_PERM + 1.0)
+
+print(f"Observed max cluster mass: {obs_mass:.6f}")
+print(f"Cluster permutation p-value: {p_cluster:.6g}")
+
+# Save CSV summary
+out = []
+for ai, a in enumerate(alphas):
+    for ri, rr in enumerate(radii):
+        out.append({
+            "alpha": float(a),
+            "r": float(rr),
+            "t_stat": float(t_grid[ai, ri]),
+            "supra": bool(abs(t_grid[ai, ri]) >= T_THRESH),
+        })
+pd.DataFrame(out).to_csv(OUT_CSV, index=False)
+print(f"Wrote: {OUT_CSV}")
+
+# Plot t heatmap
+plt.figure(figsize=(10, 4))
+plt.imshow(t_grid, aspect="auto", origin="lower")
+plt.colorbar(label="t-stat (seed-blocked)")
+plt.xticks(range(len(radii)), [f"{x:.2f}" for x in radii])
+plt.yticks(range(len(alphas)), [f"{x:.1f}" for x in alphas])
+plt.xlabel("ring radius r")
+plt.ylabel("alpha")
+plt.title("Seed-blocked t-stat heatmap for theta_odd")
+plt.tight_layout()
+plt.savefig(OUT_TPNG, dpi=170)
+plt.close()
+print(f"Wrote: {OUT_TPNG}")
+print("DONE.")
