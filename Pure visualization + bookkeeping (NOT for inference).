@@ -1,0 +1,50 @@
+# hex_kerr_chirality_dense_band_summary.py
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+CSV_IN = "hex_kerr_chirality_dense_band_odd_even.csv"
+CSV_OUT = "hex_kerr_chirality_dense_band_summary.csv"
+
+INNER_R = 0.35
+OUTER_R = 0.75
+MIN_LOOPS = 30
+
+df = pd.read_csv(CSV_IN)
+
+df["theta_odd_z"] = np.where(
+    (df["theta_odd_std"] > 0) & (df["n_loops"] >= MIN_LOOPS),
+    df["theta_odd_mean"] / df["theta_odd_std"],
+    np.nan
+)
+
+strain_rows = []
+for alpha in sorted(df["alpha"].unique()):
+    sub = df[df["alpha"] == alpha]
+    inner = sub[sub["r"] <= INNER_R]["theta_odd_mean"].mean()
+    outer = sub[sub["r"] >= OUTER_R]["theta_odd_mean"].mean()
+    strain_rows.append({
+        "alpha": alpha,
+        "theta_odd_inner": inner,
+        "theta_odd_outer": outer,
+        "strain_metric": inner - outer
+    })
+
+strain_df = pd.DataFrame(strain_rows)
+summary = df.merge(strain_df, on="alpha", how="left")
+summary.to_csv(CSV_OUT, index=False)
+
+print(f"Wrote: {CSV_OUT}")
+
+# Plot
+plt.figure()
+for r in sorted(df["r"].unique()):
+    sub = df[df["r"] == r]
+    plt.plot(sub["alpha"], sub["theta_odd_mean"], label=f"r={r:.2f}")
+plt.axhline(0, color="k", lw=0.5)
+plt.legend(fontsize=7)
+plt.tight_layout()
+plt.savefig("hex_kerr_theta_odd_vs_alpha.png", dpi=150)
+plt.close()
+
+print("DONE.")
